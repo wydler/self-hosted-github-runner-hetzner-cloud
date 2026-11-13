@@ -104,7 +104,7 @@ jobs:
       - name: Generate organization runner token
         id: org-token
         if: ${{ inputs.runner_scope == 'org' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
@@ -113,14 +113,14 @@ jobs:
       - name: Generate repository runner token
         id: repo-token
         if: ${{ inputs.runner_scope == 'repo' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
           permission-administration: write
 
       - name: Install Hetzner Cloud CLI
-        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a # v2.0.0
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
 
       - name: Collect and validate old runners
         id: collect
@@ -250,7 +250,7 @@ jobs:
       snapshot_id: ${{ steps.snapshot.outputs.id }}
     steps:
       - name: Install Hetzner Cloud CLI
-        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a # v2.0.0
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
       - name: Find snapshot
         id: snapshot
         env:
@@ -277,7 +277,7 @@ jobs:
       ssh_key_id: ${{ steps.ssh-key.outputs.id }}
     steps:
       - name: Install Hetzner Cloud CLI
-        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a # v2.0.0
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
       - name: Find SSH key
         id: ssh-key
         env:
@@ -316,7 +316,7 @@ jobs:
       - name: Generate GitHub App token
         id: github-token
         if: ${{ inputs.runner_scope == 'org' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
@@ -324,14 +324,14 @@ jobs:
       - name: Generate repository runner token
         id: repo-token
         if: ${{ inputs.runner_scope == 'repo' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
           permission-administration: write
       - name: Create runner from latest snapshot
         id: create
-        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e # 1.2.0
+        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e  # 1.2.0
         with:
           mode: create
           name: runner-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}
@@ -378,7 +378,7 @@ jobs:
       - name: Generate organization runner token
         id: org-token
         if: ${{ inputs.runner_scope == 'org' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
@@ -386,7 +386,7 @@ jobs:
       - name: Generate repository runner token
         id: repo-token
         if: ${{ inputs.runner_scope == 'repo' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
@@ -429,7 +429,7 @@ jobs:
           done
       - name: Delete old runner
         id: delete-old-runner
-        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e # 1.2.0
+        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e  # 1.2.0
         with:
           mode: delete
           github_token: ${{ inputs.runner_scope == 'org' && steps.org-token.outputs.token || steps.repo-token.outputs.token }}
