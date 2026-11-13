@@ -17,12 +17,12 @@ env:
           - hel1  # Helsinki, Finnland
           - fsn1  # Falkenstein, Germany
           - nbg1  # Nuremberg, Germany
-        default: "fsn1"     
+        default: "fsn1"
       os:
         type: choice
         description: Operating System
         required: false
-        options: 
+        options:
           - ubuntu-22.04
           - ubuntu-24.04
           - ubuntu-26.04
@@ -42,7 +42,7 @@ env:
         required: true
         default: "2"
       runner_scope:
-        type: choice 
+        type: choice
         description: Select scope for this runner
         required: false
         options:
