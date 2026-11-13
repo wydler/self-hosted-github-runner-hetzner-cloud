@@ -11,7 +11,7 @@ concurrency:
   workflow_dispatch:
     inputs:
       runner_scope:
-        type: choice 
+        type: choice
         description: Select scope for this runner
         required: false
         options:
@@ -19,7 +19,7 @@ concurrency:
           - org
         default: 'org'
       runner_group:
-        type: choice 
+        type: choice
         description: Select scope for this runner
         required: false
         options:
