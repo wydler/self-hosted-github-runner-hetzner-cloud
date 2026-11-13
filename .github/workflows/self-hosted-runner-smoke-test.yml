@@ -1,0 +1,21 @@
+---
+name: Test runner
+
+"on":
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Run on self-hosted runner
+    runs-on:
+      - self-hosted
+      - hetzner
+
+    steps:
+      - name: Check runner
+        run: |
+          hostname
+          uname -a
+
+          echo "Waiting for 2 minutes..."
+          sleep 120
