@@ -1,7 +1,7 @@
 ---
 name: Test runner
 
-on:
+"on":
   workflow_dispatch:
 
 jobs:
