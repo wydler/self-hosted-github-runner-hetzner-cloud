@@ -1,0 +1,503 @@
+---
+name: "Delete Hetzner Cloud runners"
+
+permissions: {}
+
+concurrency:
+  group: delete-hetzner-runners-${{ github.repository }}
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+     inputs:  
+       runner_scope:
+         type: choice 
+         description: Select scope for this runner
+         required: false
+         options:
+           - repo
+           - org
+         default: 'org'
+       runner_group:
+         type: choice 
+         description: Select scope for this runner
+         required: false
+         options:
+           - Default
+           - Daniel-Hetzner
+         default: 'Default'
+       runner_count:
+         type: string
+         description: Number of runners to delete, or 'all'
+         required: true
+         default: "1"
+
+
+jobs:
+  collect:
+    name: Collect runners and build deletion matrix
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Generate organization runner token
+        id: org-token
+        if: ${{ inputs.runner_scope == 'org' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-organization-self-hosted-runners: write
+
+      - name: Generate repository runner token
+        id: repo-token
+        if: ${{ inputs.runner_scope == 'repo' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-administration: write
+          
+      - name: Fetch all organization self-hosted runners
+        id: runners
+        env:
+          GH_TOKEN: ${{ inputs.runner_scope == 'org' && steps.org-token.outputs.token || steps.repo-token.outputs.token }}
+          INPUT_RUNNER_SCOPE: ${{ inputs.runner_scope }}
+          INPUT_RUNNER_GROUP: ${{ inputs.runner_group }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_REPOSITORY: ${{ github.repository }}
+        # Fetches all API pages for the selected scope and saves the runner list.
+        run: |
+          # Make command failures and unset variables fail this script.
+          set -euo pipefail
+
+          # Create the directory that holds collection diagnostics.
+          mkdir -p collect-diagnostic
+
+          # Write a fallback message in case collection fails before reporting details.
+          printf '%s\n' "Collection did not complete successfully; inspect the collect job logs." > collect-diagnostic/diagnostic.txt
+
+          # Preserve a useful diagnostic if any command fails unexpectedly.
+          trap 'status=$?; mkdir -p collect-diagnostic; printf "Runner collection command failed at line %s (exit status %s).\\n" "${BASH_LINENO[0]}" "$status" > collect-diagnostic/diagnostic.txt; exit "$status"' ERR
+
+          # Write the supplied diagnostic and stop collection with an error.
+          function exit_with_failure() {
+            # Ensure the diagnostic directory exists.
+            mkdir -p collect-diagnostic
+
+            # Save the specific failure message for the report job.
+            printf '%s\n' "$1" > collect-diagnostic/diagnostic.txt
+
+            # Mark the failure in the GitHub Actions log.
+            echo "::error::$1"
+
+            # Stop the workflow step with a failure status.
+            exit 1
+          }
+
+          # Fetch every page from a GitHub endpoint and combine its result arrays.
+          function fetch_all_pages() {
+            # Capture the endpoint, response key, output path, and pagination state.
+            local url="$1"
+            local array_key="$2"
+            local output_file="$3"
+            local page=1
+            local all_items='[]'
+
+            while true; do
+              local response_file="response-page-${page}.json"
+
+              # Download this paginated API response with GitHub authentication and API-version headers.
+              curl -L \
+                --silent \
+                --show-error \
+                --fail-with-body \
+                --connect-timeout 10 \
+                --max-time 60 \
+                -o "$response_file" \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${url}?per_page=100&page=${page}" \
+                || exit_with_failure "Failed to fetch page $page from $url!"
+
+              # Require the API response to contain the expected array.
+              if ! jq -e --arg key "$array_key" '.[$key] | type == "array"' "$response_file" > /dev/null; then
+                # Stop if GitHub returned an unexpected response shape.
+                exit_with_failure "GitHub API response from $url is missing the '$array_key' array."
+              fi
+
+              # Extract the current page's items from the API response.
+              local page_items
+              page_items=$(jq -c --arg key "$array_key" '.[$key]' "$response_file")
+              # Count page items to decide whether another API page must be fetched.
+              local item_count
+              item_count=$(jq 'length' <<< "$page_items")
+              # Append the current page's items to the results collected so far.
+              all_items=$(jq -cn --argjson all "$all_items" --argjson next "$page_items" '$all + $next')
+
+              # Stop when the API returns fewer than a full page.
+              if (( item_count < 100 )); then
+                break
+              fi
+
+              # Advance to the next API page.
+              page=$((page + 1))
+            done
+
+            # Save the combined items using the same response shape as the API.
+            jq -n --arg key "$array_key" --argjson items "$all_items" '{($key): $items}' > "$output_file"
+          }
+
+          if [[ "$INPUT_RUNNER_SCOPE" == "org" ]]; then
+            # Fetch runner groups so the selected organization group can be resolved.
+            fetch_all_pages "https://api.github.com/orgs/${GH_OWNER}/actions/runner-groups" "runner_groups" "github-runner-groups.json"
+
+            # Look up the selected group's numeric ID.
+            if ! MY_GITHUB_RUNNER_GROUP_ID=$(jq -er --arg group "$INPUT_RUNNER_GROUP" '.runner_groups[] | select(.name == $group) | .id' < "github-runner-groups.json"); then
+              exit_with_failure "Failed to get ID of the GitHub runner group!"
+            fi
+
+            # Reject group IDs that cannot safely be used in the API URL.
+            if [[ ! "$MY_GITHUB_RUNNER_GROUP_ID" =~ ^[0-9]+$ ]]; then
+              exit_with_failure "Failed to get ID of the GitHub runner group!"
+            fi
+
+            # Fetch runners in the selected organization group.
+            echo "Fetching org runners"
+            fetch_all_pages "https://api.github.com/orgs/${GH_OWNER}/actions/runner-groups/${MY_GITHUB_RUNNER_GROUP_ID}/runners" "runners" "runners.json"
+          else
+            # Fetch runners directly from the selected repository.
+            echo "Fetching repo runners"
+            fetch_all_pages "https://api.github.com/repos/${GH_REPOSITORY}/actions/runners" "runners" "runners.json"
+          fi
+
+      - name: Install Hetzner Cloud CLI
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
+
+      - name: Validate runner-to-server mappings
+        id: matrix
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          INPUT_RUNNER_COUNT: ${{ inputs.runner_count }}
+        # Validates runner/server mappings and selects the requested deletion matrix.
+        run: |
+          # Make command failures and unset variables fail this script.
+          set -euo pipefail
+
+          # Create the directory that holds collection diagnostics.
+          mkdir -p collect-diagnostic
+
+          # Start with a success diagnostic that later checks can replace on failure.
+          printf '%s\n' "No collection errors." > collect-diagnostic/diagnostic.txt
+
+          # Record a diagnostic before stopping when validation cannot continue.
+          function exit_with_failure() {
+            # Ensure the diagnostic directory exists.
+            mkdir -p collect-diagnostic
+
+            # Save the specific validation failure for the report job.
+            printf '%s\n' "$1" > collect-diagnostic/diagnostic.txt
+
+            # Mark the failure in the GitHub Actions log.
+            echo "::error::$1"
+
+            # Stop the workflow step with a failure status.
+            exit 1
+          }
+
+          # Replace the default diagnostic with the failing line and exit status.
+          trap 'status=$?; mkdir -p collect-diagnostic; printf "Runner validation command failed at line %s (exit status %s).\\n" "${BASH_LINENO[0]}" "$status" > collect-diagnostic/diagnostic.txt; exit "$status"' ERR
+
+          # Ensure the collected GitHub response has the expected structure.
+          if ! jq -e '.runners | type == "array"' runners.json > /dev/null; then
+            exit_with_failure "GitHub runners response is missing a runners array."
+          fi
+
+          # Accept either "all" or a positive whole-number deletion count.
+          if [[ "$INPUT_RUNNER_COUNT" != "all" && ! "$INPUT_RUNNER_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+            exit_with_failure "runner_count must be a positive integer or 'all'."
+          fi
+
+          # Start an empty deletion matrix and track duplicate server references.
+          matrix='[]'
+          declare -A seen_server_ids=()
+
+          # Keep only runners carrying the Hetzner server ID label.
+          if ! managed_runners=$(jq -c '.runners[] | select(any(.labels[]?; (.name? // "") | startswith("server_id=")))' runners.json); then
+            exit_with_failure "Could not identify runners with Hetzner server ID labels."
+          fi
+
+          if [[ -n "$managed_runners" ]]; then
+            # Validate each managed runner and its corresponding Hetzner server.
+            while IFS= read -r runner_json; do
+              # Read and validate the runner name before using it for deletion.
+              runner=$(jq -er '.name | strings' <<< "$runner_json") || {
+                exit_with_failure "A managed runner has no valid name."
+              }
+
+              # Reject names outside the supported format and the reserved "hetzner" name.
+              if [[ ! "$runner" =~ ^[a-zA-Z0-9_-]{1,64}$ || "$runner" == "hetzner" ]]; then
+                # Stop instead of passing an unsafe or unsupported name to the delete action.
+                exit_with_failure "Runner name '$runner' is not valid for deletion."
+              fi
+
+              # Require exactly one server ID label on each managed runner.
+              label_count=$(jq '[.labels[]? | select((.name? // "") | startswith("server_id="))] | length' <<< "$runner_json")
+              if [[ "$label_count" != "1" ]]; then
+                exit_with_failure "Runner '$runner' must have exactly one server_id label; found $label_count."
+              fi
+
+              # Extract the server ID and ensure it is a positive integer.
+              server_id=$(jq -er '[.labels[] | select((.name? // "") | startswith("server_id="))][0].name | ltrimstr("server_id=")' <<< "$runner_json")
+
+              # Reject empty, zero, or non-numeric server IDs.
+              if [[ ! "$server_id" =~ ^[1-9][0-9]*$ ]]; then
+                # Do not query or delete a server when its ID is malformed.
+                exit_with_failure "Runner '$runner' has an invalid server ID."
+              fi
+
+              # Prevent two GitHub runners from targeting the same Hetzner server.
+              if [[ -n "${seen_server_ids[$server_id]+x}" ]]; then
+                exit_with_failure "Hetzner server $server_id is associated with more than one runner."
+              fi
+              seen_server_ids[$server_id]=1
+
+              # Confirm that the Hetzner server exists and its name matches the runner.
+              if ! server_info=$(hcloud server describe "$server_id" --output json 2>&1); then
+                exit_with_failure "Could not verify Hetzner server $server_id for runner '$runner': $server_info"
+              fi
+
+              # Read the server name from the Hetzner CLI response.
+              if ! server_name=$(jq -er '.name | strings' <<< "$server_info"); then
+                exit_with_failure "Could not read the name of Hetzner server $server_id."
+              fi
+
+              # Ensure the validated runner points to a Hetzner server with the same name.
+              if [[ "$server_name" != "$runner" ]]; then
+                exit_with_failure "Runner '$runner' points to server $server_id named '$server_name'."
+              fi
+
+              # Add the verified runner/server pair to the deletion matrix.
+              matrix=$(jq -c --arg runner "$runner" --arg server_id "$server_id" \
+                '. + [{runner: $runner, server_id: $server_id}]' <<< "$matrix")
+            done <<< "$managed_runners"
+          fi
+
+          # Count the verified pairs and resolve how many runners to select.
+          available_count=$(jq 'length' <<< "$matrix")
+          if [[ "$INPUT_RUNNER_COUNT" == "all" ]]; then
+            selected_count=$available_count
+          else
+            if (( ${#INPUT_RUNNER_COUNT} > ${#available_count} )) || { (( ${#INPUT_RUNNER_COUNT} == ${#available_count} )) && [[ "$INPUT_RUNNER_COUNT" > "$available_count" ]] }; then
+              exit_with_failure "Requested $INPUT_RUNNER_COUNT runner(s), but only $available_count validated runner(s) are available."
+            fi
+            selected_count=$INPUT_RUNNER_COUNT
+          fi
+
+          # Select the requested number deterministically by runner name.
+          matrix=$(jq -c --argjson count "$selected_count" \
+            'sort_by(.runner) | .[:$count]' <<< "$matrix")
+
+          # Record how many runners were available and selected.
+          printf 'Validated %s runner(s); selected %s runner(s) for deletion in alphabetical order.\n' \
+            "$available_count" "$selected_count" > collect-diagnostic/diagnostic.txt
+
+          # Publish the matrix for the downstream deletion job.
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+      - name: Upload collection diagnostic
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: collect-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: collect-diagnostic/diagnostic.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+
+  delete:
+    name: Delete and deregister runner
+    runs-on: ubuntu-latest
+    needs: collect
+
+    if: ${{ needs.collect.outputs.matrix != '[]' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.collect.outputs.matrix) }}
+
+    steps:
+      - name: Generate organization runner token
+        id: org-token
+        if: ${{ inputs.runner_scope == 'org' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-organization-self-hosted-runners: write
+
+      - name: Generate repository runner token
+        id: repo-token
+        if: ${{ inputs.runner_scope == 'repo' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-administration: write
+          
+      - name: Delete Hetzner server and GitHub runner
+        id: delete-runner
+        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e  # 1.2.0
+        with:
+          mode: delete
+          github_token: ${{ inputs.runner_scope == 'org' && steps.org-token.outputs.token || steps.repo-token.outputs.token }}
+          hcloud_token: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          server_id: ${{ matrix.server_id }}
+          name: ${{ matrix.runner }}
+          runner_scope: ${{ inputs.runner_scope }}
+
+      - name: Record deletion result
+        if: ${{ always() }}
+        env:
+          RUNNER_NAME: ${{ matrix.runner }}
+          SERVER_ID: ${{ matrix.server_id }}
+          DELETE_RESULT: ${{ steps.delete-runner.outcome }}
+        # Saves this runner's deletion outcome for the final report.
+        run: |
+          # Create a directory for this runner's result artifact.
+          mkdir -p deletion-result
+
+          # Serialize the runner identity and action result as JSON.
+          jq -n \
+            --arg runner "$RUNNER_NAME" \
+            --arg server_id "$SERVER_ID" \
+            --arg result "${DELETE_RESULT:-not-run}" \
+            '{runner: $runner, server_id: $server_id, result: $result}' \
+            > deletion-result/result.json
+
+      - name: Upload deletion result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: deletion-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.server_id }}
+          path: deletion-result/result.json
+          if-no-files-found: error
+          retention-days: 1
+
+  report:
+    name: Summarize runner deletion results
+    runs-on: ubuntu-latest
+    needs:
+      - collect
+      - delete
+    if: ${{ always() }}
+
+    steps:
+      - name: Download deletion results
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: deletion-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: deletion-results
+          merge-multiple: true
+
+      - name: Download collection diagnostic
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: collect-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: collection-diagnostic
+
+      - name: Add deletion report
+        env:
+          RUNNER_SCOPE: ${{ inputs.runner_scope }}
+          RUNNER_GROUP: ${{ inputs.runner_group }}
+          COLLECT_RESULT: ${{ needs.collect.result }}
+          DELETE_RESULT: ${{ needs.delete.result }}
+        # Builds the workflow summary from collection diagnostics and deletion results.
+        run: |
+          # Open a block that appends the report header and metadata to the step summary.
+          {
+            # Add the report title.
+            echo "### Hetzner runner deletion report"
+
+            # Separate the title from the report details.
+            echo
+
+            # Show whether runners were selected from a repository or organization.
+            echo "- Scope: $RUNNER_SCOPE"
+
+            # Show the selected group only when organization scope is active.
+            if [[ "$RUNNER_SCOPE" == "org" ]]; then
+              # Include the runner group for organization-scoped deletions.
+              echo "- Runner group: $RUNNER_GROUP"
+            fi
+
+            # Show whether runner collection succeeded.
+            echo "- Collection job: $COLLECT_RESULT"
+
+            # Show whether runner deletion succeeded.
+            echo "- Deletion job: $DELETE_RESULT"
+
+            # Separate job results from collection diagnostics.
+            echo
+
+            # Label the diagnostic section.
+            echo "#### Collection diagnostic"
+
+            if [[ -f collection-diagnostic/diagnostic.txt ]]; then
+              # Add each line from the downloaded diagnostic artifact.
+              while IFS= read -r line; do
+                echo "- $line"
+              done < collection-diagnostic/diagnostic.txt
+            elif [[ "$COLLECT_RESULT" != "success" ]]; then
+              # Point to the collect job logs if no diagnostic artifact exists.
+              echo "- No diagnostic artifact was produced; inspect the \`collect\` job logs for the failure details."
+            else
+              # Report that collection completed without errors.
+              echo "- No collection errors."
+            fi
+
+            # Separate diagnostics from the deletion results table.
+            echo
+
+            # Add the deletion table's column headings.
+            echo "| Runner | Hetzner server ID | Result |"
+            echo "|---|---:|---|"
+
+          # Append the completed header block to the GitHub Actions step summary.
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Allow an empty result directory when no deletion artifact was produced.
+          shopt -s nullglob
+
+          # Collect result artifact paths; nullglob leaves the array empty if none exist.
+          result_files=(deletion-results/*.json)
+          # Handle runs where collection failed or the deletion matrix was empty.
+          if (( ${#result_files[@]} == 0 )); then
+            # Report that the workflow has no per-runner result rows.
+            echo "| No deletion results | - | No runners were deleted, or no result artifact was available. |" >> "$GITHUB_STEP_SUMMARY"
+
+            # Finish successfully because an empty deletion matrix is valid.
+            exit 0
+          fi
+
+          # Sort result artifacts by runner name and append each outcome to the report.
+          while IFS= read -r result; do
+            # Read the runner name from this result record.
+            runner=$(jq -r '.runner' <<< "$result")
+
+            # Read the associated Hetzner server ID.
+            server_id=$(jq -r '.server_id' <<< "$result")
+
+            # Read the action's deletion outcome.
+            outcome=$(jq -r '.result' <<< "$result")
+
+            # Add this runner's result as a row in the summary table.
+            echo "| $runner | $server_id | $outcome |" >> "$GITHUB_STEP_SUMMARY"
+
+          done < <(jq -sc 'sort_by(.runner)[]' "${result_files[@]}")
