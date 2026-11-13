@@ -13,7 +13,7 @@ env:
         type: choice
         description: Location
         required: false
-        options: 
+        options:
           - hel1  # Helsinki, Finnland
           - fsn1  # Falkenstein, Germany
           - nbg1  # Nuremberg, Germany
@@ -25,10 +25,10 @@ env:
         options: 
           - ubuntu-22.04
           - ubuntu-24.04
-          - ubuntu-26.04          
+          - ubuntu-26.04
         default: "ubuntu-24.04"
       servertype:
-        type: choice 
+        type: choice
         description: Server Type
         required: true
         options:
@@ -37,45 +37,45 @@ env:
           - cax21
         default: "cx33"
       runner_count:
-         type: string
-         description: Number of runners
-         required: true
-         default: "2"
+        type: string
+        description: Number of runners
+        required: true
+        default: "2"
       runner_scope:
-         type: choice 
-         description: Select scope for this runner
-         required: false
-         options:
-           - repo
-           - org
+        type: choice 
+        description: Select scope for this runner
+        required: false
+        options:
+          - repo
+          - org
          default: 'org'
       runner_group:
-         type: choice 
-         description: Select runner group
-         required: false
-         options:
-           - Default
-           - Daniel-Hetzner
-         default: 'Default'
+        type: choice 
+        description: Select runner group
+        required: false
+        options:
+          - Default
+          - Daniel-Hetzner
+        default: 'Default'
       runner_start_method:
-         type: choice 
-         description: Select runner start method
-         required: false
-         options:
-           - standalone
-           - systemd
-           - systemd-stopped
-         default: 'systemd'         
+        type: choice 
+        description: Select runner start method
+        required: false
+        options:
+          - standalone
+          - systemd
+          - systemd-stopped
+        default: 'systemd'         
       hcloud_ssh_key:
-         type: string
-         description: Name des SSH Keys
-         required: true
-         default: ""    
+        type: string
+        description: Name des SSH Keys
+        required: true
+        default: ""    
       runner_labels:
-         type: string
-         description: Labels für den Runner
-         required: false
-         default: "" 
+        type: string
+        description: Labels für den Runner
+        required: false
+        default: "" 
 
 
 jobs:
