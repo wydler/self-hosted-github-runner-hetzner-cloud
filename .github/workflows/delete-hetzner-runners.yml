@@ -45,7 +45,7 @@ jobs:
       - name: Generate organization runner token
         id: org-token
         if: ${{ inputs.runner_scope == 'org' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
@@ -54,7 +54,7 @@ jobs:
       - name: Generate repository runner token
         id: repo-token
         if: ${{ inputs.runner_scope == 'repo' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
@@ -334,7 +334,7 @@ jobs:
       - name: Generate organization runner token
         id: org-token
         if: ${{ inputs.runner_scope == 'org' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
@@ -343,7 +343,7 @@ jobs:
       - name: Generate repository runner token
         id: repo-token
         if: ${{ inputs.runner_scope == 'repo' }}
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         with:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
