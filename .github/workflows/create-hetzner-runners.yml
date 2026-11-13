@@ -86,7 +86,7 @@ jobs:
     steps:
       # Installiert die offizielle Hetzner Cloud CLI
       - name: Install Hetzner Cloud Cli
-        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
+        uses: hetznercloud/setup-hcloud@28cdd3fc4a4a8013e86d57c7254be72df92fcc02  # v2.0.1
 
       # Sucht nach dem neuesten Snapshot anhand des OS-Labels
       - name: Looking for a snapshot ID
@@ -143,7 +143,7 @@ jobs:
     steps:
       # Installiert die offizielle Hetzner Cloud CLI
       - name: Install Hetzner Cloud Cli
-        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
+        uses: hetznercloud/setup-hcloud@28cdd3fc4a4a8013e86d57c7254be72df92fcc02  # v2.0.1
 
       # Sucht nach dem SSH Key anhand des Namens
       - name: Looking for SSH key ID
