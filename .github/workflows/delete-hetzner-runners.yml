@@ -7,30 +7,30 @@ concurrency:
   group: delete-hetzner-runners-${{ github.repository }}
   cancel-in-progress: false
 
-on:
+"on":
   workflow_dispatch:
-     inputs:  
-       runner_scope:
-         type: choice 
-         description: Select scope for this runner
-         required: false
-         options:
-           - repo
-           - org
-         default: 'org'
-       runner_group:
-         type: choice 
-         description: Select scope for this runner
-         required: false
-         options:
-           - Default
-           - Daniel-Hetzner
-         default: 'Default'
-       runner_count:
-         type: string
-         description: Number of runners to delete, or 'all'
-         required: true
-         default: "1"
+    inputs:
+      runner_scope:
+        type: choice 
+        description: Select scope for this runner
+        required: false
+        options:
+          - repo
+          - org
+        default: 'org'
+      runner_group:
+        type: choice 
+        description: Select scope for this runner
+        required: false
+        options:
+          - Default
+          - Daniel-Hetzner
+        default: 'Default'
+      runner_count:
+        type: string
+        description: Number of runners to delete, or 'all'
+        required: true
+        default: "1"
 
 
 jobs:
@@ -59,7 +59,7 @@ jobs:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
           permission-administration: write
-          
+
       - name: Fetch all organization self-hosted runners
         id: runners
         env:
@@ -348,7 +348,7 @@ jobs:
           app-id: ${{ secrets.GH_APP_SHRHC_ID }}
           private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
           permission-administration: write
-          
+
       - name: Delete Hetzner server and GitHub runner
         id: delete-runner
         uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e  # 1.2.0
