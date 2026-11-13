@@ -1,0 +1,318 @@
+---
+name: "Create Hetzner Cloud runner"
+
+permissions: {}
+
+env:
+  MAX_RUNNER_COUNT: 5
+
+on:      
+   workflow_dispatch:
+     inputs:
+       location:
+        type: choice
+        description: Location
+        required: false
+        options: 
+          - hel1  # Helsinki, Finnland
+          - fsn1  # Falkenstein, Germany
+          - nbg1  # Nuremberg, Germany
+        default: "fsn1"     
+       os:
+        type: choice
+        description: Operating System
+        required: false
+        options: 
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-26.04          
+        default: "ubuntu-24.04"
+       servertype:
+        type: choice 
+        description: Server Type
+        required: true
+        options:
+          - cx33
+          - cpx22
+          - cax21
+        default: "cx33"
+       runner_count:
+         type: string
+         description: Number of runners
+         required: true
+         default: "2"
+       runner_scope:
+         type: choice 
+         description: Select scope for this runner
+         required: false
+         options:
+           - repo
+           - org
+         default: 'org'
+       runner_group:
+         type: choice 
+         description: Select runner group
+         required: false
+         options:
+           - Default
+           - Daniel-Hetzner
+         default: 'Default'
+       runner_start_method:
+         type: choice 
+         description: Select runner start method
+         required: false
+         options:
+           - standalone
+           - systemd
+           - systemd-stopped
+         default: 'systemd'         
+       hcloud_ssh_key:
+         type: string
+         description: Name des SSH Keys
+         required: true
+         default: ""    
+       runner_labels:
+         type: string
+         description: Labels für den Runner
+         required: false
+         default: "" 
+
+
+jobs:
+  get-hcloud-snapshot:
+    name: Get Hetzner Cloud Snapshot ID
+    runs-on: ubuntu-slim
+
+    steps:
+      # Installiert die offizielle Hetzner Cloud CLI
+      - name: Install Hetzner Cloud Cli
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
+
+      # Sucht nach dem neuesten Snapshot anhand des OS-Labels
+      - name: Looking for a snapshot ID
+        id: find_snapshot
+        env:
+          HCLOUD_SERVER_TYPE: ${{ inputs.servertype }}
+          HCLOUD_OS: ${{ inputs.os }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+        run: |
+          # Den gewaehlten Servertyp aus der Workflow-Eingabe lesen.
+          servertype="$HCLOUD_SERVER_TYPE"
+
+          # Die fuer den gewaehlten Servertyp erforderliche Architektur bestimmen.
+          if [[ "${servertype:0:3}" == "cax" ]]; then
+            # CAX-Server verwenden die ARM-Architektur.
+            arch="arm"
+          else # Fuer Nicht-CAX-Server die x86-Architektur verwenden.
+            # Alle anderen unterstuetzten Servertypen verwenden x86.
+            arch="x86"
+          fi
+
+          # Den neuesten passenden Snapshot suchen und seine ID speichern.
+          object=$(hcloud image list --output "columns=ID" --output "noheader" --type "snapshot" -l "os=$HCLOUD_OS" -a "$arch" -s "created:desc" | awk 'NR == 1 { first = $0 } END { print first }')
+
+          # Nur fortfahren, wenn eine passende Snapshot-ID gefunden wurde.
+          if [ -n "$object" ]; then
+            # Die Snapshot-ID im Workflow-Log ausgeben.
+            echo ID: "$object"
+
+            # Die Snapshot-ID fuer nachfolgende Workflow-Schritte bereitstellen.
+            echo "id=$object" >> "$GITHUB_OUTPUT"
+          else # Den Fall ohne passenden Snapshot behandeln.
+            # Im Workflow-Log melden, dass kein Snapshot zum Betriebssystem passt.
+            echo "::error::Keine Snapshot für das angegebene OS gefunden."
+
+            # Den Schritt abbrechen, da die Runner-Erstellung nicht fortfahren kann.
+            exit 1
+
+          fi
+
+      - name: Display snapshot ID
+        run: |
+          # Die vom vorherigen Schritt ermittelte Snapshot-ID ausgeben.
+          echo "${{ steps.find_snapshot.outputs.id }}"
+
+    outputs:
+      snapshot_id: ${{ steps.find_snapshot.outputs.id }}
+
+
+  get-hcloud-sshkey:
+    name: Get Hetzner Cloud SSH Key ID
+    runs-on: ubuntu-slim
+
+    steps:
+      # Installiert die offizielle Hetzner Cloud CLI
+      - name: Install Hetzner Cloud Cli
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a  # v2.0.0
+
+      # Sucht nach dem SSH Key anhand des Namens
+      - name: Looking for SSH key ID
+        id: find_sshkey
+        env:
+          HCLOUD_SSH_KEY: ${{ inputs.hcloud_ssh_key }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+        run: |
+          # Vor dem Aufruf von Hetzner Cloud einen SSH-Key-Namen verlangen.
+          if [[ -z "$HCLOUD_SSH_KEY" ]]; then
+            # Im Workflow-Log auf die fehlende Eingabe hinweisen.
+            echo "::error::Bitte einen SSH-Key-Namen angeben."
+
+            # Abbrechen, da ohne SSH-Key kein Server erstellt werden kann.
+            exit 1
+
+          fi
+
+          # Den SSH-Key bei Hetzner Cloud abfragen und Fehlermeldungen erfassen.
+          if ! key_info=$(hcloud ssh-key describe "$HCLOUD_SSH_KEY" 2>&1); then
+            # Im Workflow-Log angeben, welcher SSH-Key nicht abgefragt werden konnte.
+            echo "::error::SSH Key '$HCLOUD_SSH_KEY' konnte nicht abgefragt werden."
+
+            # Die CLI-Fehlermeldung zur Ursachenanalyse ausgeben.
+            echo "$key_info" >&2
+
+            # Abbrechen, da der angeforderte SSH-Key nicht verfuegbar ist.
+            exit 1
+
+          fi
+
+          # Die numerische ID aus der Hetzner-CLI-Antwort extrahieren.
+          object=$(awk '/^ID:/ {print $2}' <<< "$key_info")
+
+          # Pruefen, ob die Antwort eine ID enthaelt, bevor sie weitergegeben wird.
+          if [[ -z "$object" ]]; then
+            # Im Workflow-Log auf die fehlende ID hinweisen.
+            echo "::error::Für SSH Key '$HCLOUD_SSH_KEY' wurde keine ID zurückgegeben."
+
+            # Abbrechen, da die Runner-Erstellung eine gueltige SSH-Key-ID benoetigt.
+            exit 1
+          fi
+
+          # Die ermittelte SSH-Key-ID im Workflow-Log ausgeben.
+          echo "Gefundene SSH-Key-ID: $object"
+
+          # Die SSH-Key-ID fuer nachfolgende Workflow-Schritte bereitstellen.
+          echo "id=$object" >> "$GITHUB_OUTPUT"
+
+      - name: Write SSH Key ID
+        run: |
+          # Die vom vorherigen Schritt ermittelte SSH-Key-ID ausgeben.
+          echo "${{ steps.find_sshkey.outputs.id }}"
+
+    outputs:
+      ssh_key_id: ${{ steps.find_sshkey.outputs.id }}
+
+
+  prepare-runner-matrix:
+    name: Prepare runner matrix
+    runs-on: ubuntu-slim
+
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+
+    steps:
+      - name: Generate matrix
+        id: set-matrix
+        env:
+          RUNNER_COUNT: ${{ inputs.runner_count }}
+        run: |
+          # Die angeforderte Runner-Anzahl aus der Workflow-Eingabe lesen.
+          count="$RUNNER_COUNT"
+
+          # Werte ablehnen, die keine positiven Ganzzahlen sind.
+          if ! [[ "$count" =~ ^[1-9][0-9]*$ ]]; then
+            # Die ungueltige Eingabe im Workflow-Log melden.
+            echo "::error::runner_count muss eine positive Ganzzahl sein."
+
+            # Vor dem Erstellen einer ungueltigen Matrix abbrechen.
+            exit 1
+
+          fi
+
+          # Die konfigurierte maximale Runner-Anzahl pro Workflow-Lauf durchsetzen.
+          if (( count > MAX_RUNNER_COUNT )); then
+            # Den maximal erlaubten Wert im Workflow-Log melden.
+            echo "::error::runner_count darf höchstens $MAX_RUNNER_COUNT sein."
+
+            # Vor dem Erstellen einer zu grossen Matrix abbrechen.
+            exit 1
+
+          fi
+
+          # Einen Matrix-Eintrag fuer jeden angeforderten Runner erstellen.
+          matrix=$(jq -cn --argjson count "$count" '
+            # Einen Index fuer jeden angeforderten Runner erzeugen.
+            [range(1; $count + 1)]
+          ') # Ende der Erstellung der Runner-Matrix.
+
+          # Die Matrix fuer den Job zur Runner-Erstellung bereitstellen.
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+
+  create-runner:
+    name: Create runner
+    runs-on: ubuntu-latest
+    needs:
+      - get-hcloud-snapshot
+      - get-hcloud-sshkey
+      - prepare-runner-matrix
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.prepare-runner-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Generate GitHub token
+        id: generate_token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859  # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+
+      - name: Create runner instance
+        id: create-hcloud-runner
+        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e  # 1.2.0
+        with:
+          mode: create
+          name: runner-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}
+          github_token: ${{ steps.generate_token.outputs.token }}
+          hcloud_token: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          server_type: ${{ inputs.servertype }}
+          location: ${{ inputs.location }}  
+          image: ${{ needs.get-hcloud-snapshot.outputs.snapshot_id }}
+          server_wait: "120"
+          runner_scope: ${{ inputs.runner_scope }}
+          create_wait: "1" # 1*10 Sekunden = 10 Sekunden
+          ssh_key: ${{ needs.get-hcloud-sshkey.outputs.ssh_key_id }}
+          runner_start_method: ${{ inputs.runner_start_method }}
+          runner_group: ${{ inputs.runner_group }}
+          runner_labels: ${{ inputs.runner_labels }} 
+
+      - name: Add runner summary
+        if: ${{ always() }}
+        env:
+          RUNNER_NAME: ${{ steps.create-hcloud-runner.outputs.label }}
+          SERVER_ID: ${{ steps.create-hcloud-runner.outputs.server_id }}
+          SERVER_TYPE: ${{ inputs.servertype }}
+          LOCATION: ${{ inputs.location }}
+          RESULT: ${{ steps.create-hcloud-runner.outcome }}
+        run: |
+          # Einen Block starten, der das Runner-Ergebnis an die Step-Zusammenfassung anhaengt.
+          {
+            # Den Titel der Zusammenfassung hinzufuegen.
+            echo "### Runner-Erstellung"
+
+            # Eine Leerzeile nach dem Titel hinzufuegen.
+            echo
+
+            # Die Spaltenueberschriften der Tabelle hinzufuegen.
+            echo "| Runner | Server-ID | Typ | Standort | Ergebnis |"
+
+            # Die Trennlinie der Tabelle hinzufuegen.
+            echo "|---|---:|---|---|---|"
+
+            # Runner-Details mit Ersatzwerten ausgeben, falls die Erstellung fehlschlug.
+            echo "| ${RUNNER_NAME:-nicht erstellt} | ${SERVER_ID:--} | $SERVER_TYPE | $LOCATION | ${RESULT:-unbekannt} |"
+
+          # Den fertigen Block an die GitHub-Actions-Zusammenfassung anhaengen.
+          } >> "$GITHUB_STEP_SUMMARY"
