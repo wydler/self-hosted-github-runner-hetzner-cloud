@@ -1,0 +1,494 @@
+---
+name: Rotate Hetzner Cloud runners
+
+permissions: {}
+
+concurrency:
+  group: delete-hetzner-runners-${{ github.repository }}
+  cancel-in-progress: false
+
+"on":
+  workflow_dispatch:
+    inputs:
+      confirm_rotation:
+        type: boolean
+        description: I confirm that old runners will be deleted after all new runners are created
+        required: true
+        default: false
+      location:
+        type: choice
+        description: Hetzner Cloud location
+        required: true
+        options:
+          - hel1
+          - fsn1
+          - nbg1
+        default: fsn1
+      os:
+        type: choice
+        description: Operating system snapshot label
+        required: true
+        options:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-26.04
+        default: ubuntu-24.04
+      server_type:
+        type: choice
+        description: Hetzner Cloud server type
+        required: true
+        options:
+          - cx33
+          - cpx22
+          - cax21
+        default: cx33
+      runner_scope:
+        type: choice
+        description: Runner scope
+        required: true
+        options:
+          - repo
+          - org
+        default: org
+      runner_group:
+        type: choice
+        description: Organization runner group (ignored for repo scope)
+        required: true
+        options:
+          - Default
+          - Daniel-Hetzner
+        default: Default
+      runner_start_method:
+        type: choice
+        description: How the runner process starts
+        required: true
+        options:
+          - standalone
+          - systemd
+          - systemd-stopped
+        default: systemd
+      hcloud_ssh_key:
+        type: string
+        description: Hetzner Cloud SSH key name
+        required: true
+      runner_labels:
+        type: string
+        description: Additional runner labels
+        required: false
+        default: ""
+
+jobs:
+  prepare:
+    name: Validate rotation confirmation
+    runs-on: ubuntu-slim
+    steps:
+      - name: Validate confirmation
+        env:
+          CONFIRM_ROTATION: ${{ inputs.confirm_rotation }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$CONFIRM_ROTATION" != "true" ]]; then
+            echo "::error::Enable confirm_rotation to proceed with runner rotation."
+            exit 1
+          fi
+
+  collect-old-runners:
+    name: Find current runners
+    runs-on: ubuntu-latest
+    needs: prepare
+    outputs:
+      old_matrix: ${{ steps.collect.outputs.old_matrix }}
+      new_matrix: ${{ steps.collect.outputs.new_matrix }}
+    steps:
+      - name: Generate organization runner token
+        id: org-token
+        if: ${{ inputs.runner_scope == 'org' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-organization-self-hosted-runners: write
+
+      - name: Generate repository runner token
+        id: repo-token
+        if: ${{ inputs.runner_scope == 'repo' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-administration: write
+
+      - name: Install Hetzner Cloud CLI
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a # v2.0.0
+
+      - name: Collect and validate old runners
+        id: collect
+        env:
+          GH_TOKEN: ${{ inputs.runner_scope == 'org' && steps.org-token.outputs.token || steps.repo-token.outputs.token }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          RUNNER_SCOPE: ${{ inputs.runner_scope }}
+          RUNNER_GROUP: ${{ inputs.runner_group }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          fetch_all_pages() {
+            local url="$1"
+            local key="$2"
+            local output_file="$3"
+            local page=1
+            local items='[]'
+
+            while true; do
+              local response_file="response-${page}.json"
+              curl -fsSL --connect-timeout 10 --max-time 60 \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${url}?per_page=100&page=${page}" -o "$response_file" \
+                || fail "Could not fetch page $page from GitHub API."
+
+              jq -e --arg key "$key" '.[$key] | type == "array"' "$response_file" >/dev/null \
+                || fail "GitHub API response is missing the '$key' array."
+              local page_items
+              page_items=$(jq -c --arg key "$key" '.[$key]' "$response_file")
+              local count
+              count=$(jq 'length' <<< "$page_items")
+              items=$(jq -cn --argjson all "$items" --argjson next "$page_items" '$all + $next')
+              (( count < 100 )) && break
+              page=$((page + 1))
+            done
+
+            jq -n --arg key "$key" --argjson items "$items" '{($key): $items}' > "$output_file"
+          }
+
+          if [[ "$RUNNER_SCOPE" == "org" ]]; then
+            fetch_all_pages \
+              "https://api.github.com/orgs/${GH_OWNER}/actions/runner-groups" \
+              "runner_groups" groups.json
+            group_id=$(jq -er --arg group "$RUNNER_GROUP" \
+              '.runner_groups[] | select(.name == $group) | .id' groups.json) \
+              || fail "Could not find organization runner group '$RUNNER_GROUP'."
+            [[ "$group_id" =~ ^[1-9][0-9]*$ ]] || fail "Runner group ID is invalid."
+            runners_url="https://api.github.com/orgs/${GH_OWNER}/actions/runner-groups/${group_id}/runners"
+          else
+            runners_url="https://api.github.com/repos/${GH_REPOSITORY}/actions/runners"
+          fi
+
+          fetch_all_pages "$runners_url" runners runners.json
+          jq -e '.runners | type == "array"' runners.json >/dev/null \
+            || fail "GitHub runners response is invalid."
+
+          old_matrix='[]'
+          declare -A seen_server_ids=()
+          managed=$(jq -c '.runners[] | select(any(.labels[]?; (.name? // "") | startswith("server_id=")))' runners.json) \
+            || fail "Could not identify Hetzner-managed runners."
+
+          if [[ -n "$managed" ]]; then
+            while IFS= read -r runner_json; do
+              runner=$(jq -er '.name | strings' <<< "$runner_json") \
+                || fail "A managed runner has no valid name."
+              [[ "$runner" =~ ^[a-zA-Z0-9_-]{1,64}$ && "$runner" != "hetzner" ]] \
+                || fail "Runner name '$runner' is invalid."
+
+              label_count=$(jq '[.labels[]? | select((.name? // "") | startswith("server_id="))] | length' <<< "$runner_json")
+              [[ "$label_count" == "1" ]] \
+                || fail "Runner '$runner' must have exactly one server_id label."
+              server_id=$(jq -er '[.labels[] | select((.name? // "") | startswith("server_id="))][0].name | ltrimstr("server_id=")' <<< "$runner_json") \
+                || fail "Could not read the server ID for '$runner'."
+              [[ "$server_id" =~ ^[1-9][0-9]*$ ]] \
+                || fail "Runner '$runner' has an invalid server ID."
+              [[ -z "${seen_server_ids[$server_id]+x}" ]] \
+                || fail "Hetzner server $server_id is associated with multiple runners."
+              seen_server_ids[$server_id]=1
+
+              jq -e 'has("busy") and (.busy | type == "boolean")' <<< "$runner_json" >/dev/null \
+                || fail "Could not read busy status for '$runner'."
+              runner_id=$(jq -er '.id | numbers' <<< "$runner_json") \
+                || fail "Could not read GitHub runner ID for '$runner'."
+
+              server_info=$(hcloud server describe "$server_id" --output json) \
+                || fail "Could not verify Hetzner server $server_id."
+              server_name=$(jq -er '.name | strings' <<< "$server_info") \
+                || fail "Could not read Hetzner server name for $server_id."
+              [[ "$server_name" == "$runner" ]] \
+                || fail "Runner '$runner' points to server $server_id named '$server_name'."
+
+              old_matrix=$(jq -c --arg runner "$runner" --arg server_id "$server_id" --argjson runner_id "$runner_id" \
+                '. + [{runner: $runner, server_id: $server_id, runner_id: $runner_id}]' <<< "$old_matrix")
+            done <<< "$managed"
+          else
+            echo "::error::No Hetzner-managed runners found. Use https://github.com/${GH_REPOSITORY}/actions/workflows/create-hetzner-runners.yml to create the initial runners."
+            exit 1
+          fi
+
+          # Count the validated old runners to determine the replacement quantity.
+          old_count=$(jq 'length' <<< "$old_matrix")
+
+          # Build one matrix entry for each old runner so the counts match exactly.
+          new_matrix=$(jq -cn --argjson count "$old_count" '[range(1; $count + 1)]')
+
+          # Show the planned replacement count in the workflow logs.
+          echo "Will create $old_count new runner(s) to replace the existing managed runners."
+
+          # Pass the old runner details and matching creation matrix to dependent jobs.
+          echo "old_matrix=$old_matrix" >> "$GITHUB_OUTPUT"
+          echo "new_matrix=$new_matrix" >> "$GITHUB_OUTPUT"
+
+  get-snapshot:
+    name: Find latest matching snapshot
+    runs-on: ubuntu-slim
+    needs: prepare
+    outputs:
+      snapshot_id: ${{ steps.snapshot.outputs.id }}
+    steps:
+      - name: Install Hetzner Cloud CLI
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a # v2.0.0
+      - name: Find snapshot
+        id: snapshot
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          SERVER_TYPE: ${{ inputs.server_type }}
+          OS_LABEL: ${{ inputs.os }}
+        run: |
+          set -euo pipefail
+          if [[ "$SERVER_TYPE" == cax* ]]; then arch=arm; else arch=x86; fi
+          snapshot_id=$(hcloud image list --output columns=ID --output noheader \
+            --type snapshot -l "os=$OS_LABEL" -a "$arch" -s created:desc |
+            awk 'NR == 1 { first = $0 } END { print first }')
+          [[ "$snapshot_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::No matching snapshot found for $OS_LABEL ($arch)."
+            exit 1
+          }
+          echo "id=$snapshot_id" >> "$GITHUB_OUTPUT"
+
+  get-ssh-key:
+    name: Find Hetzner SSH key
+    runs-on: ubuntu-slim
+    needs: prepare
+    outputs:
+      ssh_key_id: ${{ steps.ssh-key.outputs.id }}
+    steps:
+      - name: Install Hetzner Cloud CLI
+        uses: hetznercloud/setup-hcloud@ac9e7d74fb41a3ca44a6a3da123bd5aa70731e3a # v2.0.0
+      - name: Find SSH key
+        id: ssh-key
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          SSH_KEY_NAME: ${{ inputs.hcloud_ssh_key }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SSH_KEY_NAME" ]] || {
+            echo "::error::An SSH key name is required."
+            exit 1
+          }
+          key_info=$(hcloud ssh-key describe "$SSH_KEY_NAME") || {
+            echo "::error::Could not find SSH key '$SSH_KEY_NAME'."
+            exit 1
+          }
+          id=$(awk '/^ID:/ {print $2}' <<< "$key_info")
+          [[ "$id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Could not read SSH key ID for '$SSH_KEY_NAME'."
+            exit 1
+          }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  create-new-runners:
+    name: Create new runner ${{ matrix.runner }}
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - collect-old-runners
+      - get-snapshot
+      - get-ssh-key
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.collect-old-runners.outputs.new_matrix) }}
+    steps:
+      - name: Generate GitHub App token
+        id: github-token
+        if: ${{ inputs.runner_scope == 'org' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-organization-self-hosted-runners: write
+      - name: Generate repository runner token
+        id: repo-token
+        if: ${{ inputs.runner_scope == 'repo' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-administration: write
+      - name: Create runner from latest snapshot
+        id: create
+        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e # 1.2.0
+        with:
+          mode: create
+          name: runner-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}
+          github_token: ${{ inputs.runner_scope == 'org' && steps.github-token.outputs.token || steps.repo-token.outputs.token }}
+          hcloud_token: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          server_type: ${{ inputs.server_type }}
+          location: ${{ inputs.location }}
+          image: ${{ needs.get-snapshot.outputs.snapshot_id }}
+          server_wait: "120"
+          runner_scope: ${{ inputs.runner_scope }}
+          runner_group: ${{ inputs.runner_group }}
+          runner_start_method: ${{ inputs.runner_start_method }}
+          create_wait: "1"
+          ssh_key: ${{ needs.get-ssh-key.outputs.ssh_key_id }}
+          runner_labels: ${{ inputs.runner_labels }}
+      - name: Add new runner summary
+        if: ${{ always() }}
+        env:
+          RUNNER_NAME: ${{ steps.create.outputs.label }}
+          SERVER_ID: ${{ steps.create.outputs.server_id }}
+          RESULT: ${{ steps.create.outcome }}
+        run: |
+          {
+            echo "### New runner rotation"
+            echo
+            echo "| Runner | Server ID | Result |"
+            echo "|---|---:|---|"
+            echo "| ${RUNNER_NAME:-not created} | ${SERVER_ID:--} | ${RESULT:-not run} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  delete-old-runners:
+    name: Delete old runner ${{ matrix.runner }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    needs:
+      - collect-old-runners
+      - create-new-runners
+    if: ${{ always() && needs.collect-old-runners.result == 'success' && needs.create-new-runners.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.collect-old-runners.outputs.old_matrix) }}
+    steps:
+      - name: Generate organization runner token
+        id: org-token
+        if: ${{ inputs.runner_scope == 'org' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-organization-self-hosted-runners: write
+      - name: Generate repository runner token
+        id: repo-token
+        if: ${{ inputs.runner_scope == 'repo' }}
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        with:
+          app-id: ${{ secrets.GH_APP_SHRHC_ID }}
+          private-key: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+          permission-administration: write
+      - name: Wait for old runner to become idle
+        env:
+          GH_TOKEN: ${{ inputs.runner_scope == 'org' && steps.org-token.outputs.token || steps.repo-token.outputs.token }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RUNNER_SCOPE: ${{ inputs.runner_scope }}
+          RUNNER_ID: ${{ matrix.runner_id }}
+          RUNNER_NAME: ${{ matrix.runner }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$RUNNER_SCOPE" == "org" ]]; then
+            runner_url="https://api.github.com/orgs/${GH_OWNER}/actions/runners/${RUNNER_ID}"
+          else
+            runner_url="https://api.github.com/repos/${GH_REPOSITORY}/actions/runners/${RUNNER_ID}"
+          fi
+
+          while true; do
+            runner_info=$(curl -fsSL --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" "$runner_url") || {
+                echo "::error::Could not check whether old runner '$RUNNER_NAME' is idle."
+                exit 1
+              }
+            busy=$(jq -r 'if has("busy") and (.busy | type == "boolean") then .busy else error("busy must be boolean") end' <<< "$runner_info") || {
+              echo "::error::Could not read busy status for old runner '$RUNNER_NAME'."
+              exit 1
+            }
+            if [[ "$busy" == "false" ]]; then
+              echo "::notice::Old runner '$RUNNER_NAME' is idle; proceeding with deletion."
+              break
+            fi
+            echo "::notice::Old runner '$RUNNER_NAME' is in use; waiting 60 seconds before checking again."
+            sleep 60
+          done
+      - name: Delete old runner
+        id: delete-old-runner
+        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e # 1.2.0
+        with:
+          mode: delete
+          github_token: ${{ inputs.runner_scope == 'org' && steps.org-token.outputs.token || steps.repo-token.outputs.token }}
+          hcloud_token: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
+          server_id: ${{ matrix.server_id }}
+          name: ${{ matrix.runner }}
+          runner_scope: ${{ inputs.runner_scope }}
+      - name: Add deletion summary
+        if: ${{ always() }}
+        env:
+          RUNNER_NAME: ${{ matrix.runner }}
+          SERVER_ID: ${{ matrix.server_id }}
+          RESULT: ${{ steps.delete-old-runner.outcome }}
+        run: |
+          {
+            echo "### Old runner rotation"
+            echo
+            echo "| Runner | Server ID | Result |"
+            echo "|---|---:|---|"
+            echo "| $RUNNER_NAME | $SERVER_ID | ${RESULT:-not run} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rotation-summary:
+    name: Rotation result
+    runs-on: ubuntu-slim
+    needs:
+      - prepare
+      - collect-old-runners
+      - create-new-runners
+      - delete-old-runners
+    if: ${{ always() }}
+    steps:
+      - name: Summarize rotation
+        env:
+          OLD_COUNT: ${{ needs.collect-old-runners.outputs.old_matrix }}
+          COLLECT_RESULT: ${{ needs.collect-old-runners.result }}
+          CREATE_RESULT: ${{ needs.create-new-runners.result }}
+          DELETE_RESULT: ${{ needs.delete-old-runners.result }}
+        run: |
+          old_count=0
+          if [[ -n "$OLD_COUNT" ]]; then
+            old_count=$(jq 'length' <<< "$OLD_COUNT")
+          fi
+
+          {
+            echo "### Runner rotation summary"
+            echo
+            echo "- Old managed runners found: $old_count"
+            echo "- Collection: $COLLECT_RESULT"
+            echo "- New runner creation: $CREATE_RESULT"
+            echo "- Old runner deletion (including idle wait): $DELETE_RESULT"
+            echo
+            if [[ "$CREATE_RESULT" != "success" ]]; then
+              echo "Old runners were not intentionally deleted because creation of all new runners did not succeed."
+            elif [[ "$DELETE_RESULT" == "success" ]]; then
+              echo "Rotation completed successfully."
+            elif [[ "$DELETE_RESULT" == "skipped" ]]; then
+              echo "No old runners were deleted; review the collection and deletion job results above."
+            else
+              echo "Review the delete-old-runners job for details."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
