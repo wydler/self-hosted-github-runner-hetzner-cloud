@@ -36,6 +36,12 @@ Hinweis: Bei `hcloud_ssh_key` handelt es sich nicht um eine ID, sondern um den N
 
 Die Workflows prüfen zunächst, ob die GitHub Runner-Umgebung korrekt konfiguriert ist, holen dann passende Hetzner-Details wie Snapshot-ID und den Namen des SSH-Schlüssels und erstellen oder entfernen anschließend die Runner in Matrix-Form.
 
+## Wiederverwendung in anderen Workflows
+
+Die Create- und Delete-Workflows können sowohl manuell per `workflow_dispatch` als auch als wiederverwendbare Workflows per `workflow_call` gestartet werden. Beim Aufruf von Create muss `single_runner: true` gesetzt und `runner_count` genau `1` sein; der Workflow stellt `label` und `server_id` als Outputs bereit. Delete benötigt `exact_runner: true` sowie `runner_name` und `server_id`, um gezielt genau diesen Runner zu entfernen. Vor dem Löschen wird geprüft, ob Name und Hetzner-Server zusammengehören.
+
+Beim Aufruf müssen die Secrets `GH_APP_SHRHC_ID`, `GH_APP_SHRHC_PRIVATE_KEY` und `HCLOUD_TOKEN_GHSHR_RW` übergeben werden. Ein Beispiel für den Create-Job, den Job auf dem Runner und den anschließenden Delete-Job steht in `.github/workflows/hetzner-runner-lifecycle-test.yml`. Dessen Dispatch-Eingaben entsprechen denen des Create-Workflows; `runner_count` ist auf einen Runner ausgelegt.
+
 ## 1) Workflow: Create
 
 Datei: `.github/workflows/create-hetzner-runners.yml`
@@ -44,7 +50,7 @@ Datei: `.github/workflows/create-hetzner-runners.yml`
 Erstellt einen oder mehrere neue self-hosted GitHub Runner auf Hetzner Cloud.
 
 ### Trigger
-Manuell per `workflow_dispatch`.
+Manuell per `workflow_dispatch` oder als wiederverwendbarer Workflow per `workflow_call`.
 
 ### Eingaben
 
@@ -122,7 +128,7 @@ Datei: `.github/workflows/delete-hetzner-runners.yml`
 Entfernt verwaltete Hetzner Runner aus GitHub und Hetzner Cloud.
 
 ### Trigger
-Manuell per `workflow_dispatch`.
+Manuell per `workflow_dispatch` oder als wiederverwendbarer Workflow per `workflow_call`.
 
 ### Eingaben
 
