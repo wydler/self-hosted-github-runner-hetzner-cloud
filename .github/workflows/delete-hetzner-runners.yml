@@ -31,6 +31,39 @@ concurrency:
         description: Number of runners to delete, or 'all'
         required: true
         default: "1"
+  workflow_call:
+    inputs:
+      exact_runner:
+        description: Require deletion of the supplied runner_name and server_id only.
+        type: boolean
+        required: true
+      runner_scope:
+        type: string
+        required: false
+        default: "org"
+      runner_group:
+        type: string
+        required: false
+        default: "Default"
+      runner_count:
+        type: string
+        required: false
+        default: "1"
+      runner_name:
+        type: string
+        required: false
+        default: ""
+      server_id:
+        type: string
+        required: false
+        default: ""
+    secrets:
+      GH_APP_SHRHC_ID:
+        required: true
+      GH_APP_SHRHC_PRIVATE_KEY:
+        required: true
+      HCLOUD_TOKEN_GHSHR_RW:
+        required: true
 
 
 jobs:
@@ -182,6 +215,9 @@ jobs:
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
           INPUT_RUNNER_COUNT: ${{ inputs.runner_count }}
+          INPUT_RUNNER_NAME: ${{ inputs.runner_name }}
+          INPUT_SERVER_ID: ${{ inputs.server_id }}
+          EXACT_RUNNER_MODE: ${{ inputs.exact_runner }}
         # Validates runner/server mappings and selects the requested deletion matrix.
         run: |
           # Make command failures and unset variables fail this script.
@@ -214,11 +250,6 @@ jobs:
           # Ensure the collected GitHub response has the expected structure.
           if ! jq -e '.runners | type == "array"' runners.json > /dev/null; then
             exit_with_failure "GitHub runners response is missing a runners array."
-          fi
-
-          # Accept either "all" or a positive whole-number deletion count.
-          if [[ "$INPUT_RUNNER_COUNT" != "all" && ! "$INPUT_RUNNER_COUNT" =~ ^[1-9][0-9]*$ ]]; then
-            exit_with_failure "runner_count must be a positive integer or 'all'."
           fi
 
           # Start an empty deletion matrix and track duplicate server references.
@@ -288,21 +319,56 @@ jobs:
 
           # Count the verified pairs and resolve how many runners to select.
           available_count=$(jq 'length' <<< "$matrix")
-          if [[ "$INPUT_RUNNER_COUNT" == "all" ]]; then
-            selected_count=$available_count
-          else
-            if (( ${#INPUT_RUNNER_COUNT} > ${#available_count} )) || { (( ${#INPUT_RUNNER_COUNT} == ${#available_count} )) && [[ "$INPUT_RUNNER_COUNT" > "$available_count" ]] }; then
-              exit_with_failure "Requested $INPUT_RUNNER_COUNT runner(s), but only $available_count validated runner(s) are available."
-            fi
-            selected_count=$INPUT_RUNNER_COUNT
+          if [[ -n "$EXACT_RUNNER_MODE" && "$EXACT_RUNNER_MODE" != "true" ]]; then
+            exit_with_failure "exact_runner must be true for workflow_call."
+          fi
+          if [[ "$EXACT_RUNNER_MODE" == "true" && -z "$INPUT_RUNNER_NAME" && -z "$INPUT_SERVER_ID" ]]; then
+            exit_with_failure "workflow_call requires runner_name and server_id; refusing to select runners by count."
           fi
 
-          # Select the requested number deterministically by runner name.
-          matrix=$(jq -c --argjson count "$selected_count" \
-            'sort_by(.runner) | .[:$count]' <<< "$matrix")
+          if [[ -n "$INPUT_RUNNER_NAME" || -n "$INPUT_SERVER_ID" ]]; then
+            # Require both identifiers when deleting one exact runner.
+            if [[ -z "$INPUT_RUNNER_NAME" || -z "$INPUT_SERVER_ID" ]]; then
+              exit_with_failure "runner_name and server_id must be provided together."
+            fi
+
+            # Validate target identifiers before selecting a runner.
+            if [[ ! "$INPUT_RUNNER_NAME" =~ ^[a-zA-Z0-9_-]{1,64}$ || "$INPUT_RUNNER_NAME" == "hetzner" ]]; then
+              exit_with_failure "Runner name '$INPUT_RUNNER_NAME' is not valid for deletion."
+            fi
+            if [[ ! "$INPUT_SERVER_ID" =~ ^[1-9][0-9]*$ ]]; then
+              exit_with_failure "Server ID '$INPUT_SERVER_ID' is not a positive integer."
+            fi
+
+            # Select only the validated runner/server pair requested by the caller.
+            matrix=$(jq -c --arg runner "$INPUT_RUNNER_NAME" --arg server_id "$INPUT_SERVER_ID" \
+              '[.[] | select(.runner == $runner and .server_id == $server_id)]' <<< "$matrix")
+            selected_count=$(jq 'length' <<< "$matrix")
+            if [[ "$selected_count" != "1" ]]; then
+              exit_with_failure "The requested runner and server ID do not match one validated Hetzner runner."
+            fi
+          else
+            # Accept either "all" or a positive whole-number deletion count.
+            if [[ "$INPUT_RUNNER_COUNT" != "all" && ! "$INPUT_RUNNER_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+              exit_with_failure "runner_count must be a positive integer or 'all'."
+            fi
+
+            if [[ "$INPUT_RUNNER_COUNT" == "all" ]]; then
+              selected_count=$available_count
+            else
+              if (( ${#INPUT_RUNNER_COUNT} > ${#available_count} )) || { (( ${#INPUT_RUNNER_COUNT} == ${#available_count} )) && [[ "$INPUT_RUNNER_COUNT" > "$available_count" ]] }; then
+                exit_with_failure "Requested $INPUT_RUNNER_COUNT runner(s), but only $available_count validated runner(s) are available."
+              fi
+              selected_count=$INPUT_RUNNER_COUNT
+            fi
+
+            # Select the requested number deterministically by runner name.
+            matrix=$(jq -c --argjson count "$selected_count" \
+              'sort_by(.runner) | .[:$count]' <<< "$matrix")
+          fi
 
           # Record how many runners were available and selected.
-          printf 'Validated %s runner(s); selected %s runner(s) for deletion in alphabetical order.\n' \
+          printf 'Validated %s runner(s); selected %s runner(s) for deletion.\n' \
             "$available_count" "$selected_count" > collect-diagnostic/diagnostic.txt
 
           # Publish the matrix for the downstream deletion job.
