@@ -1,0 +1,124 @@
+name: "Hetzner Runner Lifecycle Test"
+
+"on":
+  workflow_dispatch:
+    inputs:
+      location:
+        type: choice
+        description: Location
+        required: false
+        options:
+          - hel1  # Helsinki, Finnland
+          - fsn1  # Falkenstein, Germany
+          - nbg1  # Nuremberg, Germany
+        default: "fsn1"
+      os:
+        type: choice
+        description: Operating System
+        required: false
+        options:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-26.04
+        default: "ubuntu-24.04"
+      servertype:
+        type: choice
+        description: Server Type
+        required: true
+        options:
+          - cx33
+          - cpx22
+          - cax21
+        default: "cx33"
+      runner_count:
+        type: string
+        description: Number of runners (this workflow supports exactly one)
+        required: true
+        default: "1"
+      runner_scope:
+        type: choice
+        description: Select scope for this runner
+        required: false
+        options:
+          - repo
+          - org
+        default: "org"
+      runner_group:
+        type: choice
+        description: Select runner group
+        required: false
+        options:
+          - Default
+          - Daniel-Hetzner
+        default: "Default"
+      runner_start_method:
+        type: choice
+        description: Select runner start method
+        required: false
+        options:
+          - standalone
+          - systemd
+          - systemd-stopped
+        default: "systemd"
+      hcloud_ssh_key:
+        type: string
+        description: Name des SSH Keys
+        required: true
+        default: ""
+      runner_labels:
+        type: string
+        description: Labels für den Runner
+        required: false
+        default: ""
+
+jobs:
+  create-runner:
+    name: Create Hetzner Cloud runner
+    uses: ./.github/workflows/create-hetzner-runners.yml
+    with:
+      single_runner: true
+      location: ${{ inputs.location }}
+      os: ${{ inputs.os }}
+      servertype: ${{ inputs.servertype }}
+      runner_count: ${{ inputs.runner_count }}
+      runner_scope: ${{ inputs.runner_scope }}
+      runner_group: ${{ inputs.runner_group }}
+      runner_start_method: ${{ inputs.runner_start_method }}
+      hcloud_ssh_key: ${{ inputs.hcloud_ssh_key }}
+      runner_labels: ${{ inputs.runner_labels }}
+    secrets:
+      GH_APP_SHRHC_ID: ${{ secrets.GH_APP_SHRHC_ID }}
+      GH_APP_SHRHC_PRIVATE_KEY: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+      HCLOUD_TOKEN_GHSHR_RW: ${{ secrets.DW_HCLOUD_TOKEN_GHSHR_RW }}
+
+  do-the-job:
+    name: Do the job on the runner
+    needs: create-runner # required to start the main job when the runner is ready
+    runs-on: ${{ needs.create-runner.outputs.label }} # run the job on the newly created runner
+    steps:
+      - name: Check runner
+        run: |
+          hostname
+          uname -a
+
+          echo "Waiting for 2 minutes..."
+          sleep 120
+
+  delete-runner:
+    name: Delete Hetzner Cloud runner
+    needs:
+      - create-runner # required to get output from the create-runner job
+      - do-the-job # required to wait when the main job is done
+    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    uses: ./.github/workflows/delete-hetzner-runners.yml
+    with:
+      exact_runner: true
+      runner_scope: ${{ inputs.runner_scope }}
+      runner_group: ${{ inputs.runner_group }}
+      runner_count: "1"
+      runner_name: ${{ needs.create-runner.outputs.label }}
+      server_id: ${{ needs.create-runner.outputs.server_id }}
+    secrets:
+      GH_APP_SHRHC_ID: ${{ secrets.GH_APP_SHRHC_ID }}
+      GH_APP_SHRHC_PRIVATE_KEY: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
+      HCLOUD_TOKEN_GHSHR_RW: ${{ secrets.DW_HCLOUD_TOKEN_GHSHR_RW }}
