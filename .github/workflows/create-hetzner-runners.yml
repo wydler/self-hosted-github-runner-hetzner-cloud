@@ -76,6 +76,60 @@ env:
         description: Labels für den Runner
         required: false
         default: ""
+  workflow_call:
+    inputs:
+      single_runner:
+        description: Require exactly one runner so scalar outputs identify it unambiguously.
+        type: boolean
+        required: true
+      location:
+        type: string
+        required: false
+        default: "fsn1"
+      os:
+        type: string
+        required: false
+        default: "ubuntu-24.04"
+      servertype:
+        type: string
+        required: true
+      runner_count:
+        type: string
+        required: false
+        default: "1"
+      runner_scope:
+        type: string
+        required: false
+        default: "org"
+      runner_group:
+        type: string
+        required: false
+        default: "Default"
+      runner_start_method:
+        type: string
+        required: false
+        default: "systemd"
+      hcloud_ssh_key:
+        type: string
+        required: true
+      runner_labels:
+        type: string
+        required: false
+        default: ""
+    secrets:
+      GH_APP_SHRHC_ID:
+        required: true
+      GH_APP_SHRHC_PRIVATE_KEY:
+        required: true
+      HCLOUD_TOKEN_GHSHR_RW:
+        required: true
+    outputs:
+      label:
+        description: Name of the created runner.
+        value: ${{ jobs.create-runner.outputs.label }}
+      server_id:
+        description: Hetzner Cloud server ID of the created runner.
+        value: ${{ jobs.create-runner.outputs.server_id }}
 
 
 jobs:
@@ -214,6 +268,7 @@ jobs:
         id: set-matrix
         env:
           RUNNER_COUNT: ${{ inputs.runner_count }}
+          SINGLE_RUNNER_MODE: ${{ inputs.single_runner }}
         run: |
           # Die angeforderte Runner-Anzahl aus der Workflow-Eingabe lesen.
           count="$RUNNER_COUNT"
@@ -226,6 +281,16 @@ jobs:
             # Vor dem Erstellen einer ungueltigen Matrix abbrechen.
             exit 1
 
+          fi
+
+          # A reusable workflow call exposes scalar outputs for exactly one runner.
+          if [[ -n "$SINGLE_RUNNER_MODE" && "$SINGLE_RUNNER_MODE" != "true" ]]; then
+            echo "::error::single_runner muss bei workflow_call auf true gesetzt sein."
+            exit 1
+          fi
+          if [[ "$SINGLE_RUNNER_MODE" == "true" && "$count" != "1" ]]; then
+            echo "::error::runner_count muss bei workflow_call genau 1 sein."
+            exit 1
           fi
 
           # Die konfigurierte maximale Runner-Anzahl pro Workflow-Lauf durchsetzen.
@@ -260,6 +325,10 @@ jobs:
       fail-fast: false
       matrix:
         runner: ${{ fromJson(needs.prepare-runner-matrix.outputs.matrix) }}
+
+    outputs:
+      label: ${{ steps.create-hcloud-runner.outputs.label }}
+      server_id: ${{ steps.create-hcloud-runner.outputs.server_id }}
 
     steps:
       - name: Generate GitHub token
