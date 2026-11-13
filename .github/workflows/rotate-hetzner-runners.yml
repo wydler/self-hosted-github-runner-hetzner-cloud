@@ -331,7 +331,7 @@ jobs:
           permission-administration: write
       - name: Create runner from latest snapshot
         id: create
-        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e  # 1.2.0
+        uses: wydler/hcloud-self-hosted-github-runner@5122bebfa43222a8b2cb1e3b372d7738f53c6b33  # 1.2.1
         with:
           mode: create
           name: runner-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}
@@ -429,7 +429,7 @@ jobs:
           done
       - name: Delete old runner
         id: delete-old-runner
-        uses: wydler/hcloud-self-hosted-github-runner@e86279bcc3c13daaaa6f47fe6c528d11db5a9f1e  # 1.2.0
+        uses: wydler/hcloud-self-hosted-github-runner@5122bebfa43222a8b2cb1e3b372d7738f53c6b33  # 1.2.1
         with:
           mode: delete
           github_token: ${{ inputs.runner_scope == 'org' && steps.org-token.outputs.token || steps.repo-token.outputs.token }}
