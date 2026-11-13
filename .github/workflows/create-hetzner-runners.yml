@@ -48,9 +48,9 @@ env:
         options:
           - repo
           - org
-         default: 'org'
+        default: 'org'
       runner_group:
-        type: choice 
+        type: choice
         description: Select runner group
         required: false
         options:
@@ -58,24 +58,24 @@ env:
           - Daniel-Hetzner
         default: 'Default'
       runner_start_method:
-        type: choice 
+        type: choice
         description: Select runner start method
         required: false
         options:
           - standalone
           - systemd
           - systemd-stopped
-        default: 'systemd'         
+        default: 'systemd'
       hcloud_ssh_key:
         type: string
         description: Name des SSH Keys
         required: true
-        default: ""    
+        default: ""
       runner_labels:
         type: string
         description: Labels für den Runner
         required: false
-        default: "" 
+        default: ""
 
 
 jobs:
