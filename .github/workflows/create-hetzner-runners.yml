@@ -6,10 +6,10 @@ permissions: {}
 env:
   MAX_RUNNER_COUNT: 5
 
-on:      
-   workflow_dispatch:
-     inputs:
-       location:
+"on":
+  workflow_dispatch:
+    inputs:
+      location:
         type: choice
         description: Location
         required: false
@@ -18,7 +18,7 @@ on:
           - fsn1  # Falkenstein, Germany
           - nbg1  # Nuremberg, Germany
         default: "fsn1"     
-       os:
+      os:
         type: choice
         description: Operating System
         required: false
@@ -27,7 +27,7 @@ on:
           - ubuntu-24.04
           - ubuntu-26.04          
         default: "ubuntu-24.04"
-       servertype:
+      servertype:
         type: choice 
         description: Server Type
         required: true
@@ -36,12 +36,12 @@ on:
           - cpx22
           - cax21
         default: "cx33"
-       runner_count:
+      runner_count:
          type: string
          description: Number of runners
          required: true
          default: "2"
-       runner_scope:
+      runner_scope:
          type: choice 
          description: Select scope for this runner
          required: false
@@ -49,7 +49,7 @@ on:
            - repo
            - org
          default: 'org'
-       runner_group:
+      runner_group:
          type: choice 
          description: Select runner group
          required: false
@@ -57,7 +57,7 @@ on:
            - Default
            - Daniel-Hetzner
          default: 'Default'
-       runner_start_method:
+      runner_start_method:
          type: choice 
          description: Select runner start method
          required: false
@@ -66,12 +66,12 @@ on:
            - systemd
            - systemd-stopped
          default: 'systemd'         
-       hcloud_ssh_key:
+      hcloud_ssh_key:
          type: string
          description: Name des SSH Keys
          required: true
          default: ""    
-       runner_labels:
+      runner_labels:
          type: string
          description: Labels für den Runner
          required: false
@@ -278,15 +278,15 @@ jobs:
           github_token: ${{ steps.generate_token.outputs.token }}
           hcloud_token: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
           server_type: ${{ inputs.servertype }}
-          location: ${{ inputs.location }}  
+          location: ${{ inputs.location }}
           image: ${{ needs.get-hcloud-snapshot.outputs.snapshot_id }}
           server_wait: "120"
           runner_scope: ${{ inputs.runner_scope }}
-          create_wait: "1" # 1*10 Sekunden = 10 Sekunden
+          create_wait: "1"  # 1*10 Sekunden = 10 Sekunden
           ssh_key: ${{ needs.get-hcloud-sshkey.outputs.ssh_key_id }}
           runner_start_method: ${{ inputs.runner_start_method }}
           runner_group: ${{ inputs.runner_group }}
-          runner_labels: ${{ inputs.runner_labels }} 
+          runner_labels: ${{ inputs.runner_labels }}
 
       - name: Add runner summary
         if: ${{ always() }}
