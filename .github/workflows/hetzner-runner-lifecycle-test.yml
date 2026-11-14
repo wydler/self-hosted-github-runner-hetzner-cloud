@@ -89,7 +89,7 @@ jobs:
     secrets:
       GH_APP_SHRHC_ID: ${{ secrets.GH_APP_SHRHC_ID }}
       GH_APP_SHRHC_PRIVATE_KEY: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
-      HCLOUD_TOKEN_GHSHR_RW: ${{ secrets.DW_HCLOUD_TOKEN_GHSHR_RW }}
+      HCLOUD_TOKEN_GHSHR_RW: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
 
   do-the-job:
     name: Do the job on the runner
@@ -121,4 +121,4 @@ jobs:
     secrets:
       GH_APP_SHRHC_ID: ${{ secrets.GH_APP_SHRHC_ID }}
       GH_APP_SHRHC_PRIVATE_KEY: ${{ secrets.GH_APP_SHRHC_PRIVATE_KEY }}
-      HCLOUD_TOKEN_GHSHR_RW: ${{ secrets.DW_HCLOUD_TOKEN_GHSHR_RW }}
+      HCLOUD_TOKEN_GHSHR_RW: ${{ secrets.HCLOUD_TOKEN_GHSHR_RW }}
