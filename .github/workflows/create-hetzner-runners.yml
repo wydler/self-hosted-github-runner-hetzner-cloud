@@ -33,8 +33,12 @@ env:
         required: true
         options:
           - cx33
+          - cx43
           - cpx22
+          - cpx32
+          - cpx42
           - cax21
+          - cax31
         default: "cx33"
       runner_count:
         type: string
